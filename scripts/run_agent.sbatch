@@ -48,6 +48,24 @@ set -uo pipefail
 
 PLAN="${1:?usage: sbatch run_agent.sbatch <experiment_plan.json>}"
 
+# Resolve the plan to an absolute path BEFORE the `cd "$PROJECT"` below, and
+# check it exists BEFORE spending three minutes of GPU time loading 61GB of
+# weights for a run that cannot start. A relative path resolved after the cd
+# silently pointed somewhere else, and the failure only surfaced once the server
+# was already up — the agent exited immediately and the trap tore the server
+# straight back down, which reads like a server problem and is not one.
+if [[ ! -f "$PLAN" ]]; then
+    echo "error: plan file not found: $PLAN" >&2
+    echo "       (resolved from $(pwd); pass an absolute path)" >&2
+    exit 2
+fi
+PLAN="$(cd "$(dirname "$PLAN")" && pwd)/$(basename "$PLAN")"
+
+if ! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$PLAN" 2>/dev/null; then
+    echo "error: $PLAN is not valid JSON" >&2
+    exit 2
+fi
+
 # --- modules -----------------------------------------------------------------
 # `module purge` first (§7.1): loading inside the job script rather than
 # inheriting the submitting shell's modules is what makes a run reproducible.
