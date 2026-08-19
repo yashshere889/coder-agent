@@ -206,7 +206,9 @@ def run_plan(
 
     # --- environment ---------------------------------------------------------
     try:
-        env = envman.provision(experiment_dir, base_env=config.base_env)
+        env = envman.provision(
+            experiment_dir, base_env=config.base_env, venv_root=config.venv_root
+        )
     except envman.EnvError as exc:
         report.status = STATUS_TERMINAL
         report.reason = f"could not provision an environment: {exc}"

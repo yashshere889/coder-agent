@@ -60,39 +60,40 @@ uv run coder-agent run experiment_plan.json --data-dir ~/staged-data
 
 ## Barkla
 
-One-time, **on a viz node** (`barklaviz1.liv.ac.uk` — long builds are killed on
-the login node):
+Full command-by-command runbook: **[docs/BARKLA.md](docs/BARKLA.md)**.
+
+One-time, **on a viz node** (`barklaviz1` — the login node kills lengthy builds
+without warning):
 
 ```bash
-cd /mnt/fastscratch/users/$USER/coder-agent
-bash scripts/build_base_env.sh
+cd /mnt/fastscratch/users/$USER/coder-agent && bash scripts/build_base_env.sh
 ```
 
 That builds the vLLM Apptainer image, the pinned base environment every
-experiment inherits, and downloads the model (~61GB) into `HF_HOME` on
-fastscratch. It has to happen ahead of time because compute nodes frequently
-have **no outbound network** — which is also why a package missing at run time
-reports "add it to `build_base_env.sh`" rather than retrying an unreachable
-index.
+experiment inherits, and downloads the model (~61GB) — all ahead of time,
+because compute nodes frequently have **no outbound network**.
 
-Then, per run:
+Then, per run, submitted from fastscratch:
 
 ```bash
 sbatch scripts/run_agent.sbatch /path/to/experiment_plan.json
 ```
 
+`scripts/run_agent_lowpri.sbatch` is the same run on pre-emptible A100s for when
+`gpu-h100` is busy.
+
 ### GPU split
 
-`run_agent.sbatch` requests 2 H100s and gives the model server **one** of them
-(`TP=1`, ~61GB of BF16 weights at 0.90 utilisation, ~110K tokens of KV cache).
-GPU 1 goes to the generated experiment via `CODER_EXPERIMENT_GPUS=1`. An agent
-that occupies both cards has nowhere to run the science.
+`gpu-h100` nodes are 4 × H100 SXM 80GB with 96 cores and 2TB RAM. The job asks
+for two cards and gives the model server **one** of them (`TP=1`, ~61GB of BF16
+weights at 0.90 utilisation, ~110K tokens of KV cache). GPU 1 goes to the
+generated experiment. An agent that occupies both cards has nowhere to run the
+science.
 
 Need the full 256K context and no GPU experiment? `TP=2 MAXLEN=262144 sbatch ...`
-— and set `LLM_CONTEXT_WINDOW` to match, since a prompt over the server's real
-ceiling gets a 400 rather than a completion. The server prints its true KV
-budget as `GPU KV cache size: N tokens` at startup; `serve_vllm.sh` greps it out
-for you.
+— and `LLM_CONTEXT_WINDOW` must match, since a prompt over the server's real
+ceiling gets a 400 rather than a completion. `serve_vllm.sh` greps the true
+budget (`GPU KV cache size: N tokens`) out of the startup log for you.
 
 ## What a run produces
 

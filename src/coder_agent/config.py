@@ -25,6 +25,7 @@ class Settings:
     llm_max_tokens: int
     llm_context_window: int
     experiments_dir: str
+    venv_root: str
     base_env: str
     experiment_gpus: str
     max_code_attempts: int
@@ -58,6 +59,13 @@ def load_settings() -> Settings:
         # 400 back instead of a completion.
         llm_context_window=int(os.environ.get("LLM_CONTEXT_WINDOW", "131072")),
         experiments_dir=os.environ.get("CODER_EXPERIMENTS_DIR", "experiments"),
+        # Where the per-experiment overlay venvs live. Empty means "inside the
+        # experiment directory", which is right on a laptop. On Barkla it should
+        # point at localscratch (/tmp/users/$USER): scratch and fastscratch have
+        # inode quotas (300k / 500k files) that a venv per experiment eats into,
+        # localscratch has no quota and is the fastest filesystem on the node,
+        # and the venv is rebuilt per job anyway so losing it costs nothing.
+        venv_root=os.environ.get("CODER_VENV_ROOT", ""),
         # Empty = no pre-baked base env; every overlay venv starts bare. Set by
         # scripts/build_base_env.sh on the cluster.
         base_env=os.environ.get("CODER_BASE_ENV", ""),

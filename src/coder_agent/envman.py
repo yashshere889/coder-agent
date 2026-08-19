@@ -148,14 +148,25 @@ def provision(
     base_env: str = "",
     requirements: list[str] | None = None,
     reuse: bool = True,
+    venv_root: str = "",
 ) -> ExperimentEnv:
     """Create (or reuse) the overlay venv for one experiment.
 
     Inherits the base env's site-packages when one is configured, so the heavy
     scientific stack is shared rather than reinstalled per experiment — which on
-    a cluster is the difference between seconds and a quarter of an hour.
+    a cluster is the difference between seconds and a quarter of an hour, and
+    which Barkla's own Python guidance recommends for exactly the reason it
+    matters here: duplicated packages "often lead to exceeding the file number
+    quota".
+
+    `venv_root` puts the venv somewhere other than beside the results. On Barkla
+    that is localscratch, which has no inode quota and is node-local — the venv
+    is disposable, the results are not, and they should not share a filesystem.
     """
-    venv_path = experiment_dir / ".venv"
+    if venv_root:
+        venv_path = Path(venv_root) / experiment_dir.name / ".venv"
+    else:
+        venv_path = experiment_dir / ".venv"
     python_bin = str(venv_path / "bin" / "python")
 
     if reuse and Path(python_bin).exists():
