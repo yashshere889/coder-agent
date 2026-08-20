@@ -143,12 +143,18 @@ TP="${TP:-1}"
 # (server on device 0, experiment on device 1) then handed the experiment a card
 # vLLM was already sharding onto, while simultaneously starting a TP=2 server
 # that could only see one device.
-SERVER_GPUS="$(seq -s, 0 $((TP - 1)))"
-if [[ "$GPUS_ALLOCATED" -gt "$TP" ]]; then
-    _spare_gpus="$(seq -s, "$TP" $((GPUS_ALLOCATED - 1)))"
-else
-    _spare_gpus=""
-fi
+# Built with a loop rather than `seq -s,` on purpose: BSD seq appends a trailing
+# separator ("0," for a single device) where GNU seq does not, and a trailing
+# comma in CUDA_VISIBLE_DEVICES is not something to find out about on a compute
+# node. This is identical everywhere.
+_gpu_range() {  # first last -> "first,first+1,...,last"  (empty if first > last)
+    local out="" i
+    for ((i = $1; i <= $2; i++)); do out="${out:+$out,}$i"; done
+    printf '%s' "$out"
+}
+
+SERVER_GPUS="$(_gpu_range 0 $((TP - 1)))"
+_spare_gpus="$(_gpu_range "$TP" $((GPUS_ALLOCATED - 1)))"
 export CODER_EXPERIMENT_GPUS="${CODER_EXPERIMENT_GPUS-$_spare_gpus}"
 if [[ -z "$CODER_EXPERIMENT_GPUS" ]]; then
     echo "note: all $GPUS_ALLOCATED allocated GPU(s) go to vLLM (TP=$TP) — experiments run CPU-only"
