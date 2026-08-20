@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -200,6 +201,12 @@ def run_plan(
     sources = data.resolve(requirements, staging_dir=staging_dir, network=envman.has_network())
     report.provenance = data.write_provenance(sources, experiment_dir / "data_provenance.json")
     data_block = data.prompt_block(sources)
+    granted_credentials = {
+        name: os.environ[name]
+        for source in sources
+        for name in source.credentials
+        if name in os.environ
+    }
     logger.info(
         "[%s] data: %s", plan.hypothesis_id, report.provenance["methodological_validity"]
     )
@@ -288,6 +295,10 @@ def run_plan(
                 timeout_seconds=timeout,
                 memory_limit_gb=config.memory_limit_gb,
                 gpus=config.experiment_gpus,
+                # Only the credentials the data layer actually granted for this
+                # run cross the allowlist. Everything else the agent holds stays
+                # out of reach of generated code.
+                env_extra=granted_credentials,
                 log_dir=experiment_dir / "logs",
             )
             results, present = _read_results(results_path)

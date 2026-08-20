@@ -16,15 +16,48 @@ def test_restricted_sources_become_labelled_surrogates_not_silent_downloads():
 
 
 def test_an_open_source_is_real_when_the_node_has_network():
-    sources = data.resolve(["EPA Air Quality System PM2.5 monitor data"], network=True)
+    sources = data.resolve(["World Bank development indicators"], network=True)
     assert sources[0].kind == data.KIND_REAL_DOWNLOAD
-    assert "aqs.epa.gov" in sources[0].uri
+    assert "worldbank.org" in sources[0].uri
 
 
 def test_the_same_open_source_is_a_surrogate_when_the_node_is_isolated():
-    sources = data.resolve(["EPA Air Quality System PM2.5 monitor data"], network=False)
+    sources = data.resolve(["World Bank development indicators"], network=False)
     assert sources[0].kind == data.KIND_SURROGATE
     assert "no outbound network" in sources[0].reason
+
+
+def test_a_source_needing_an_api_key_is_a_surrogate_until_the_key_exists(monkeypatch):
+    """Public is not the same as fetchable.
+
+    EPA AQS is open data behind free registration. Without the key every request
+    is a 401 — which no amount of regenerating the code can fix, so it must not
+    be presented to the model as something it can download.
+    """
+    monkeypatch.delenv("AQS_EMAIL", raising=False)
+    monkeypatch.delenv("AQS_KEY", raising=False)
+
+    sources = data.resolve(["EPA Air Quality System PM2.5 monitor data"], network=True)
+
+    assert sources[0].kind == data.KIND_SURROGATE
+    assert "requires an API key" in sources[0].reason
+    assert "AQS_EMAIL" in sources[0].reason and "AQS_KEY" in sources[0].reason
+    assert "aqs.epa.gov/data/api/signup" in sources[0].reason
+
+
+def test_the_same_source_becomes_real_once_the_key_is_set(monkeypatch):
+    monkeypatch.setenv("AQS_EMAIL", "someone@example.org")
+    monkeypatch.setenv("AQS_KEY", "test-key")
+
+    sources = data.resolve(["EPA Air Quality System PM2.5 monitor data"], network=True)
+
+    assert sources[0].kind == data.KIND_REAL_DOWNLOAD
+    assert sources[0].credentials == ["AQS_EMAIL", "AQS_KEY"]
+
+    block = data.prompt_block(sources)
+    assert "os.environ['AQS_KEY']" in block
+    assert "never print them" in block
+    assert "test-key" not in block, "the value itself must never reach the prompt"
 
 
 def test_a_staged_file_beats_everything_including_a_restricted_source(tmp_path: Path):
@@ -82,7 +115,7 @@ def test_the_verdict_stands_when_every_input_is_real():
 
 def test_the_prompt_tells_the_model_which_inputs_are_synthetic():
     sources = data.resolve(
-        ["EPA Air Quality System PM2.5", "CMS Medicare claims"], network=True
+        ["World Bank development indicators", "CMS Medicare claims"], network=True
     )
     block = data.prompt_block(sources)
 

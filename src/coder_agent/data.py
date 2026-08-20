@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -61,6 +62,30 @@ OPEN_SOURCE_HINTS: list[tuple[str, str, str]] = [
     (r"hugging ?face", "Hugging Face datasets", "https://datasets-server.huggingface.co/rows"),
 ]
 
+# Sources that are public but require a registered API key. Listed separately
+# because "open" and "fetchable right now" are different things, and conflating
+# them is how a run spends its fix budget on HTTP 401s: the code is correct, the
+# endpoint is correct, and no amount of regeneration produces a credential.
+#
+# With the credentials present in the environment these resolve as real; without
+# them they become labelled surrogates that say exactly which variable to set.
+CREDENTIALED_SOURCES: list[tuple[str, str, str, tuple[str, ...], str]] = [
+    (
+        r"\bEPA\b|air quality system|\bAQS\b",
+        "EPA AQS",
+        "https://aqs.epa.gov/data/api",
+        ("AQS_EMAIL", "AQS_KEY"),
+        "register free at https://aqs.epa.gov/data/api/signup, then export AQS_EMAIL and AQS_KEY",
+    ),
+    (
+        r"\bNOAA\b|climate data online",
+        "NOAA CDO",
+        "https://www.ncei.noaa.gov/cdo-web/api/v2",
+        ("NOAA_CDO_TOKEN",),
+        "request a token at https://www.ncdc.noaa.gov/cdo-web/token, then export NOAA_CDO_TOKEN",
+    ),
+]
+
 # Sources that are real but categorically NOT openly downloadable. Naming them
 # explicitly is the difference between an agent that reports "I could not obtain
 # CMS claims, here is why" and one that quietly makes some up.
@@ -90,6 +115,7 @@ class DataSource:
     rows: int | None = None
     reason: str = ""
     hints: list[str] = field(default_factory=list)
+    credentials: list[str] = field(default_factory=list)
 
     @property
     def is_real(self) -> bool:
@@ -106,6 +132,7 @@ class DataSource:
             "rows": self.rows,
             "reason": self.reason,
             "hints": self.hints,
+            "credentials": self.credentials,
         }
 
 
@@ -193,6 +220,40 @@ def resolve(
                     reason=f"staged locally at {staged}",
                 )
             )
+            continue
+
+        credentialed = _match(CREDENTIALED_SOURCES, requirement)
+        if credentialed:
+            _, label, uri, variables, howto = credentialed
+            present = {v: os.environ.get(v, "") for v in variables}
+            if all(present.values()):
+                resolved.append(
+                    DataSource(
+                        name=requirement,
+                        kind=KIND_REAL_DOWNLOAD,
+                        description=requirement,
+                        uri=uri,
+                        reason=f"{label}, credentials found in {', '.join(variables)}",
+                        hints=[f"{label}: {uri}", f"credentials in env: {', '.join(variables)}"],
+                        credentials=list(variables),
+                    )
+                )
+            else:
+                unset = [v for v, value in present.items() if not value]
+                resolved.append(
+                    DataSource(
+                        name=requirement,
+                        kind=KIND_SURROGATE,
+                        description=requirement,
+                        uri=uri,
+                        reason=(
+                            f"{label} requires an API key and {', '.join(unset)} "
+                            f"{'is' if len(unset) == 1 else 'are'} not set ({howto}); "
+                            "a documented surrogate is generated instead"
+                        ),
+                        hints=[f"{label}: {uri}"],
+                    )
+                )
             continue
 
         restricted = _match(RESTRICTED_SOURCES, requirement)
@@ -322,6 +383,12 @@ def prompt_block(sources: list[DataSource]) -> str:
             lines.append("   Read it directly. Do not download anything for this input.")
         elif source.kind == KIND_REAL_DOWNLOAD:
             lines.append(f"   REAL, fetch from: {source.uri}")
+            if source.credentials:
+                lines.append(
+                    "   Credentials are in the environment — read them with "
+                    + " and ".join(f"os.environ['{v}']" for v in source.credentials)
+                    + ". Never hardcode them, and never print them."
+                )
             lines.append(
                 "   Wrap the fetch in try/except. On failure, raise a clear error — do NOT "
                 "silently fall back to made-up numbers."
