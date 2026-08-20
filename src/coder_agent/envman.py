@@ -31,9 +31,12 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Import name → PyPI distribution name, for the cases where they differ. An
+# Import name → PyPI distribution name, for the cases where they differ, and
+# ONLY where installing that distribution actually provides that import. An
 # unknown import falls through to its own name, which is right far more often
 # than it is wrong.
+#
+# Successor packages do NOT belong here — see DEAD_IMPORTS below for why.
 IMPORT_TO_PACKAGE: dict[str, str] = {
     "sklearn": "scikit-learn",
     "skimage": "scikit-image",
@@ -48,10 +51,7 @@ IMPORT_TO_PACKAGE: dict[str, str] = {
     "OpenSSL": "pyOpenSSL",
     "pkg_resources": "setuptools",
     "torch": "torch",
-    "stan": "cmdstanpy",
-    "pystan": "cmdstanpy",  # pystan 2.x is unmaintained and won't build; cmdstanpy is the live path
     "arviz": "arviz",
-    "pymc3": "pymc",  # pymc3 is EOL; the import that survives is `pymc`
     "geopandas": "geopandas",
     "rasterio": "rasterio",
     "shapely": "shapely",
@@ -68,6 +68,24 @@ IMPORT_TO_PACKAGE: dict[str, str] = {
     "flax": "flax",
     "transformers": "transformers",
     "datasets": "datasets",
+}
+
+# Imports that no installable distribution provides, mapped to what to use
+# instead. These are NOT aliases, and the difference is the whole point:
+# installing `scikit-learn` really does provide `import sklearn`, but installing
+# `pymc` does not provide `import pymc3` — PyMC 3 is end-of-life and its module
+# name is simply gone. Treating the second case like the first produces an
+# install that reports success while the identical ImportError comes back on
+# every retry, which is exactly the loop this project exists to prevent.
+#
+# So these route to code regeneration, carrying the replacement API with them.
+DEAD_IMPORTS: dict[str, tuple[str, str]] = {
+    "pymc3": ("pymc", "PyMC 3 is end-of-life. Use PyMC 5: `import pymc as pm`. The API is close but not identical — `pm.Model()`, `pm.sample()` and the distributions are the same, while `pm.sample(return_inferencedata=True)` is now the default and theano/aesara references should become pytensor."),
+    "pystan": ("cmdstanpy", "PyStan 2.x is unmaintained and will not build on a cluster. Use CmdStanPy: `from cmdstanpy import CmdStanModel`, write the Stan program to a .stan file, then `CmdStanModel(stan_file=...)` and `.sample()`."),
+    "theano": ("pytensor", "Theano is dead. PyMC 5 uses PyTensor: `import pytensor.tensor as pt`."),
+    "aesara": ("pytensor", "Aesara was renamed. Use `import pytensor.tensor as pt`."),
+    "sklearn.cross_validation": ("scikit-learn", "That module was removed in scikit-learn 0.20. Use `sklearn.model_selection`."),
+    "scipy.misc": ("scipy", "scipy.misc was removed. Use `imageio` for image IO or the specific scipy submodule."),
 }
 
 # Packages a generated experiment must never pull in: they either fight the
@@ -120,6 +138,14 @@ def has_network(host: str = "pypi.org", port: int = 443, timeout: float = 4.0) -
             return True
     except OSError:
         return False
+
+
+def is_dead_import(module: str) -> tuple[str, str] | None:
+    """If this import can never be satisfied by installing anything, say what to use instead."""
+    if module in DEAD_IMPORTS:
+        return DEAD_IMPORTS[module]
+    root = module.split(".")[0]
+    return DEAD_IMPORTS.get(root)
 
 
 def resolve_package(module: str) -> str:

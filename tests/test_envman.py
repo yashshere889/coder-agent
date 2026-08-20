@@ -15,12 +15,26 @@ def test_import_names_map_to_the_distributions_that_provide_them():
     assert envman.resolve_package("pandas") == "pandas", "unmapped names pass through"
 
 
-def test_dead_bayesian_packages_map_to_their_living_replacements():
-    # A model trained on older code writes `import pystan` / `import pymc3`.
-    # Both are unmaintained and will not build on a cluster; installing the
-    # successor is the only repair that can work.
-    assert envman.resolve_package("pystan") == "cmdstanpy"
-    assert envman.resolve_package("pymc3") == "pymc"
+def test_dead_imports_are_not_treated_as_installable_aliases():
+    """The distinction that job 10274056 was lost on.
+
+    `sklearn` -> `scikit-learn` is an alias: installing the distribution really
+    does provide the import. `pymc3` -> `pymc` is a successor: PyMC 3 is
+    end-of-life and installing PyMC 5 provides no `pymc3` module at all. Routing
+    the second like the first gives an install that reports success while the
+    identical ImportError returns on every retry.
+    """
+    assert envman.is_dead_import("sklearn") is None, "an alias is installable"
+
+    for module, expected in [("pymc3", "pymc"), ("pystan", "cmdstanpy"), ("theano", "pytensor")]:
+        dead = envman.is_dead_import(module)
+        assert dead is not None, f"{module} cannot be satisfied by any install"
+        assert dead[0] == expected
+        assert dead[1], "a replacement must carry usable guidance for the code generator"
+
+
+def test_a_dead_import_is_detected_through_a_submodule():
+    assert envman.is_dead_import("pymc3.distributions") is not None
 
 
 def test_the_denylist_refuses_packages_that_would_fight_the_agent(tmp_path: Path):

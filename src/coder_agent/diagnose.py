@@ -36,6 +36,7 @@ ROUTE_TERMINAL = "terminal"
 # ModuleNotFoundError also produces a traceback, and must not be read as
 # generic runtime breakage.
 CLASSES = (
+    "obsolete_dependency",
     "missing_dependency",
     "missing_system_library",
     "api_mismatch",
@@ -50,6 +51,7 @@ CLASSES = (
 )
 
 ROUTE_BY_CLASS = {
+    "obsolete_dependency": ROUTE_CODE,
     "missing_dependency": ROUTE_ENV,
     "missing_system_library": ROUTE_TERMINAL,
     "api_mismatch": ROUTE_CODE,
@@ -207,6 +209,30 @@ def classify(
     match = _MODULE_RE.search(combined) or _IMPORT_NO_MODULE_RE.search(combined)
     if match:
         module = match.group(1)
+
+        # ...unless nothing installable provides it. An install that "succeeds"
+        # without satisfying the import is worse than one that fails: the code
+        # is re-run unchanged, hits the identical error, and the loop repeats
+        # until the no-progress guard stops it. Route these to the code
+        # generator with the replacement API attached.
+        from .envman import is_dead_import
+
+        replacement = is_dead_import(module)
+        if replacement:
+            package, guidance = replacement
+            return Diagnosis(
+                failure_class="obsolete_dependency",
+                route=ROUTE_CODE,
+                signature=make_signature("obsolete_dependency", module),
+                summary=(
+                    f"`import {module}` cannot be satisfied — no installable package provides it. "
+                    f"{guidance}"
+                ),
+                evidence=evidence,
+                module=module,
+                details={"import_name": module, "replacement": package, "guidance": guidance},
+            )
+
         return Diagnosis(
             failure_class="missing_dependency",
             route=ROUTE_ENV,

@@ -101,6 +101,33 @@ def cmd_check(args: argparse.Namespace) -> int:
         )
     elif not Path(settings.base_env).exists():
         problems.append(f"CODER_BASE_ENV points at {settings.base_env}, which does not exist")
+    else:
+        # Existing is not the same as usable. Job 10274056 reported "no problems
+        # found" against a base env holding a Python and nothing else, then
+        # logged "0 base packages available" thirty seconds later — the check
+        # has to ask the interpreter, not the filesystem.
+        base_python = Path(settings.base_env) / "bin" / "python"
+        if not base_python.exists():
+            problems.append(
+                f"CODER_BASE_ENV={settings.base_env} contains no interpreter at bin/python — "
+                "re-run scripts/build_base_env.sh"
+            )
+        else:
+            probe_env = envman.ExperimentEnv(
+                venv_path=Path(settings.base_env), python_bin=str(base_python)
+            )
+            found = [p for p, ok in envman.probe(probe_env, envman.BASE_ENV_PACKAGES).items() if ok]
+            print(f"\nbase environment\n  {len(found)}/{len(envman.BASE_ENV_PACKAGES)} expected packages present")
+            missing = sorted(set(envman.BASE_ENV_PACKAGES) - set(found))
+            if missing:
+                print(f"  missing: {', '.join(missing)}")
+            if len(found) < len(envman.BASE_ENV_PACKAGES) // 2:
+                problems.append(
+                    f"CODER_BASE_ENV has only {len(found)} of {len(envman.BASE_ENV_PACKAGES)} "
+                    "expected packages — its install step did not finish. Re-run "
+                    "scripts/build_base_env.sh, or every experiment will install the "
+                    "scientific stack itself."
+                )
     if not runtime["network"]:
         problems.append(
             "no outbound network from this node — anything not already in the base env "

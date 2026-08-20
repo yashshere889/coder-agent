@@ -194,3 +194,29 @@ def test_the_last_traceback_wins_when_a_run_logged_a_handled_one_earlier():
     )
     d = diagnose.classify(exit_code=1, stdout="", stderr=log)
     assert "shapes do not align" in d.summary
+
+
+def test_an_obsolete_import_goes_to_the_code_generator_not_the_installer():
+    """The failure from job 10274056, which no install could ever have fixed.
+
+    Three attempts each installed `pymc` successfully and re-ran code that still
+    said `import pymc3`. The install was not wrong; routing there was.
+    """
+    d = diagnose.classify(
+        exit_code=1,
+        stdout="",
+        stderr=PANDAS_TRACEBACK.replace("pandas", "pymc3"),
+    )
+
+    assert d.failure_class == "obsolete_dependency"
+    assert d.route == diagnose.ROUTE_CODE
+    assert d.route != diagnose.ROUTE_ENV, "installing anything cannot satisfy this import"
+    assert d.details["replacement"] == "pymc"
+    assert "PyMC 5" in d.summary, "the fix prompt must carry the replacement API"
+
+
+def test_an_ordinary_missing_package_still_goes_to_the_installer():
+    """The new branch must not swallow the case it sits in front of."""
+    d = diagnose.classify(exit_code=1, stdout="", stderr=PANDAS_TRACEBACK.replace("pandas", "geopandas"))
+    assert d.failure_class == "missing_dependency"
+    assert d.route == diagnose.ROUTE_ENV
