@@ -74,7 +74,11 @@ uv --version
 # "suitable for installing Anaconda/Miniconda/Miniforge, Python and R".
 echo
 echo "==> building the experiment base environment"
-uv venv --python 3.11 "$BASE_ENV"
+# --allow-existing so this script can be re-run. It is the natural thing to do
+# after adding a package to the list below, and `set -e` plus uv's "a virtual
+# environment already exists" error otherwise aborts before the install step —
+# leaving whatever partial package set the previous run managed.
+uv venv --python 3.11 --allow-existing "$BASE_ENV"
 uv pip install --python "$BASE_ENV/bin/python" \
     numpy pandas scipy scikit-learn statsmodels matplotlib seaborn \
     pyarrow tqdm requests \

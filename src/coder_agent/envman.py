@@ -238,6 +238,54 @@ def _create_venv(venv_path: Path, parent_python: str | None) -> None:
     if result.returncode != 0:
         raise EnvError(f"could not create venv at {venv_path}: {result.stderr.strip()[-1500:]}")
 
+    if parent_python:
+        _link_site_packages(venv_path, parent_python)
+
+
+def _site_packages_of(python_bin: str) -> str:
+    """Ask an interpreter where its own site-packages directory is."""
+    try:
+        result = subprocess.run(
+            [python_bin, "-c", "import sysconfig;print(sysconfig.get_paths()['purelib'])"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def _link_site_packages(venv_path: Path, parent_python: str) -> None:
+    """Point the overlay at the base env's packages with an explicit .pth file.
+
+    `--system-site-packages` is passed as well, but it is not sufficient on its
+    own and the failure is silent. When the base env is itself a venv, whether
+    the flag inherits the *base venv's* packages or the underlying interpreter's
+    (usually empty) depends on the uv version — 0.11 and 0.12 behave differently
+    on the same inputs, which is how a Barkla run logged "0 base packages
+    available" against a base env that demonstrably held twenty of them, and
+    then reinstalled the entire scientific stack per experiment.
+
+    A .pth file is plain CPython: every path in it is added to sys.path at
+    startup. It is appended after the overlay's own site-packages, so anything
+    installed into the overlay still shadows the base env — which is what makes
+    the overlay an overlay.
+    """
+    base_site = _site_packages_of(parent_python)
+    if not base_site or not Path(base_site).is_dir():
+        return
+    overlay_site = _site_packages_of(str(venv_path / "bin" / "python"))
+    if not overlay_site:
+        return
+    try:
+        Path(overlay_site).mkdir(parents=True, exist_ok=True)
+        (Path(overlay_site) / "_coder_agent_base_env.pth").write_text(base_site + "\n")
+    except OSError:
+        # Not fatal: the run still works, it just pays to install what the base
+        # env already had. The caller's package probe will make that visible.
+        pass
+
 
 def is_available(env: ExperimentEnv, module: str) -> bool:
     """Ask the overlay interpreter whether it can import a module.

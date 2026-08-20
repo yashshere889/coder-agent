@@ -217,7 +217,25 @@ def run_plan(
         return report
 
     available = [m for m, ok in envman.probe(env, envman.BASE_ENV_PACKAGES).items() if ok]
-    logger.info("[%s] %d base packages available", plan.hypothesis_id, len(available))
+    logger.info(
+        "[%s] %d/%d base packages available",
+        plan.hypothesis_id,
+        len(available),
+        len(envman.BASE_ENV_PACKAGES),
+    )
+    if config.base_env and len(available) < len(envman.BASE_ENV_PACKAGES) // 2:
+        # Not fatal — the run proceeds and installs what it needs — but this is
+        # the difference between an experiment starting in seconds and one
+        # spending a quarter of an hour rebuilding the scientific stack, and it
+        # is invisible unless something says so.
+        logger.warning(
+            "[%s] CODER_BASE_ENV=%s is configured but only %d of its packages are visible "
+            "from the experiment venv. Every experiment will reinstall what the base env "
+            "already has. Check `coder-agent check`.",
+            plan.hypothesis_id,
+            config.base_env,
+            len(available),
+        )
 
     # --- first candidate -----------------------------------------------------
     tracker = repair.ProgressTracker()

@@ -101,3 +101,48 @@ def test_availability_is_asked_of_the_target_interpreter(tmp_path: Path):
 
     assert envman.is_available(env, "json") is True
     assert envman.is_available(env, "a_module_that_does_not_exist") is False
+
+
+def test_the_overlay_actually_sees_the_base_environments_packages(tmp_path: Path):
+    """The failure behind 'CODER_BASE_ENV set, 0 base packages available'.
+
+    Whether `--system-site-packages` inherits from a base env that is itself a
+    venv depends on the uv version, and when it does not the run says nothing —
+    it just reinstalls everything. The explicit .pth makes it deterministic.
+    """
+    base = tmp_path / "base"
+    envman._create_venv(base, None)
+    base_python = str(base / "bin" / "python")
+    # A stdlib-adjacent module is enough; this test must not touch the network.
+    site_dir = Path(envman._site_packages_of(base_python))
+    (site_dir / "pretend_base_package.py").write_text("VALUE = 42\n")
+
+    experiment_dir = tmp_path / "H1"
+    experiment_dir.mkdir()
+    env = envman.provision(experiment_dir, base_env=str(base))
+
+    assert envman.is_available(env, "pretend_base_package"), (
+        "the overlay must see the base env's packages, or every experiment reinstalls them"
+    )
+
+
+def test_the_overlay_can_still_shadow_a_base_package(tmp_path: Path):
+    """Inheritance must not become precedence — an overlay install has to win."""
+    base = tmp_path / "base"
+    envman._create_venv(base, None)
+    base_site = Path(envman._site_packages_of(str(base / "bin" / "python")))
+    (base_site / "shadowed.py").write_text("ORIGIN = 'base'\n")
+
+    experiment_dir = tmp_path / "H2"
+    experiment_dir.mkdir()
+    env = envman.provision(experiment_dir, base_env=str(base))
+    overlay_site = Path(envman._site_packages_of(env.python_bin))
+    (overlay_site / "shadowed.py").write_text("ORIGIN = 'overlay'\n")
+
+    import subprocess
+
+    result = subprocess.run(
+        [env.python_bin, "-c", "import shadowed;print(shadowed.ORIGIN)"],
+        capture_output=True, text=True, timeout=120,
+    )
+    assert result.stdout.strip() == "overlay"
