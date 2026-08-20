@@ -429,6 +429,28 @@ def check_contract(
             details={"problem": "wrong_metrics", "reported": sorted(metrics)},
         )
 
+    # Any non-finite value is a broken computation, whatever its neighbours look
+    # like. A real run produced `bayes_factor: inf` — a division by zero from a
+    # posterior with no mass on one side — and it passed, because three other
+    # metrics were fine. Zero can be a legitimate answer and is not flagged
+    # here; inf and NaN never are.
+    nonfinite = _nonfinite_metrics(metrics)
+    if nonfinite:
+        return Diagnosis(
+            failure_class="contract",
+            route=ROUTE_CODE,
+            signature=make_signature("contract", "nonfinite", ",".join(sorted(nonfinite))),
+            summary=(
+                "These metrics are infinite or NaN, which means the computation that "
+                f"produced them failed rather than returned a value: {sorted(nonfinite)}. "
+                "An infinite Bayes factor usually means a divide-by-zero from a posterior "
+                "with no mass on one side — use a Savage-Dickey ratio or report the "
+                "posterior probability directly."
+            ),
+            evidence=str(results)[:2000],
+            details={"problem": "nonfinite_metrics", "keys": sorted(nonfinite)},
+        )
+
     degenerate = _degenerate_metrics(metrics)
     if degenerate:
         return Diagnosis(
@@ -461,6 +483,26 @@ def _metric_satisfied(metrics: dict[str, Any], planned: str) -> bool:
         if key_words and (key_words <= planned_words or len(key_words & planned_words) >= 2):
             return True
     return False
+
+
+def _nonfinite_metrics(metrics: dict[str, Any]) -> list[str]:
+    """Metric keys holding an inf or a NaN, at any nesting depth."""
+    import math
+
+    def bad(value: Any) -> bool:
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, (int, float)):
+            return math.isnan(value) or math.isinf(value)
+        if isinstance(value, (list, tuple)):
+            return any(bad(v) for v in value)
+        if isinstance(value, dict):
+            return any(bad(v) for v in value.values())
+        if isinstance(value, str):
+            return value.strip().lower() in {"inf", "-inf", "infinity", "nan"}
+        return False
+
+    return [key for key, value in metrics.items() if bad(value)]
 
 
 def _degenerate_metrics(metrics: dict[str, Any]) -> list[str]:

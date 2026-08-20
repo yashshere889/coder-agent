@@ -220,3 +220,41 @@ def test_an_ordinary_missing_package_still_goes_to_the_installer():
     d = diagnose.classify(exit_code=1, stdout="", stderr=PANDAS_TRACEBACK.replace("pandas", "geopandas"))
     assert d.failure_class == "missing_dependency"
     assert d.route == diagnose.ROUTE_ENV
+
+
+def test_an_infinite_metric_is_rejected_even_beside_healthy_ones():
+    """From the real run: `bayes_factor: inf` passed because three siblings were fine.
+
+    An infinite Bayes factor is a divide-by-zero, not a finding. The all-dead
+    rule that (correctly) lets a legitimate zero through does not catch it.
+    """
+    d = diagnose.classify(
+        exit_code=0, stdout="", stderr="", results_present=True,
+        results={"metrics": {
+            "posterior_mean_nickel_deprivation": -0.108,
+            "posterior_mean_pm25_greenspace": -0.383,
+            "bayes_factor_nickel_deprivation": 299.0,
+            "bayes_factor_pm25_greenspace": float("inf"),
+        }},
+    )
+    assert d is not None, "an infinite metric must not be reported as a successful result"
+    assert d.failure_class == "contract"
+    assert d.details["problem"] == "nonfinite_metrics"
+    assert d.details["keys"] == ["bayes_factor_pm25_greenspace"]
+    assert "Savage-Dickey" in d.summary, "the fix prompt should say how to compute it properly"
+
+
+def test_nan_is_caught_inside_a_nested_credible_interval():
+    d = diagnose.classify(
+        exit_code=0, stdout="", stderr="", results_present=True,
+        results={"metrics": {"beta": 0.4, "ci": [float("nan"), 1.2]}},
+    )
+    assert d.details["problem"] == "nonfinite_metrics"
+
+
+def test_a_legitimate_zero_beside_real_numbers_still_passes():
+    d = diagnose.classify(
+        exit_code=0, stdout="", stderr="", results_present=True,
+        results={"metrics": {"beta_a": 0.0, "beta_b": -0.31}},
+    )
+    assert d is None, "zero is a real answer; only inf/NaN are broken computations"

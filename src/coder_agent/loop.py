@@ -249,6 +249,7 @@ def run_plan(
     notes: list[str] = []
     code_attempts = 0
     env_repairs = 0
+    force_escalate = False
     attempt_number = 0
 
     try:
@@ -400,11 +401,23 @@ def run_plan(
                 gpus=config.experiment_gpus,
                 timeout_seconds=timeout,
                 attempt=attempt_number,
-                escalate=outcome.escalate,
+                escalate=outcome.escalate or force_escalate,
                 previous_notes=notes[-6:],
                 max_format_retries=config.max_format_retries,
             )
             code_attempts += 1
+            if codegen.is_cosmetic_change(code, generated.code):
+                # Same logic, new comments. Running it would spend an execution
+                # rediscovering the identical failure, and the no-progress guard
+                # would only notice a cycle later. Escalate straight away: the
+                # next request demands a different approach rather than another
+                # patch to one that has not moved.
+                logger.warning(
+                    "[%s] regeneration changed nothing that executes — forcing a strategy change",
+                    plan.hypothesis_id,
+                )
+                notes.append("attempt %d returned semantically identical code" % attempt_number)
+                force_escalate = True
             code = generated.code
             report.assumptions = list(generated.assumptions)
         except Exception as exc:

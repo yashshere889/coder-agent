@@ -240,3 +240,39 @@ def regenerate(
         model, prompt, field_names=prompts.EXPERIMENT_FIELD_NAMES, max_format_retries=max_format_retries
     )
     return build(plan, sections)
+
+
+def normalized(code: str) -> str:
+    """Source stripped to what actually executes, for comparing two candidates.
+
+    Comments, blank lines and indentation depth are removed, so a regeneration
+    that only reworded a comment or hoisted an expression into a variable
+    compares equal to what it replaced.
+    """
+    import io
+    import tokenize
+
+    try:
+        pieces = []
+        for token in tokenize.generate_tokens(io.StringIO(code).readline):
+            if token.type in (tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE):
+                continue
+            if token.type == tokenize.INDENT or token.type == tokenize.DEDENT:
+                continue
+            pieces.append(token.string.strip())
+        return " ".join(p for p in pieces if p)
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        # Unparseable source is compared verbatim; the compile check will
+        # reject it moments later anyway.
+        return " ".join(code.split())
+
+
+def is_cosmetic_change(before: str, after: str) -> bool:
+    """Did a regeneration change anything that will alter execution?
+
+    A model asked to fix a failure it does not understand will often return the
+    same logic with a fresh comment explaining the problem it did not solve.
+    Executing that costs a full run to rediscover the identical error, so it is
+    worth detecting before the subprocess starts rather than after.
+    """
+    return normalized(before) == normalized(after)
