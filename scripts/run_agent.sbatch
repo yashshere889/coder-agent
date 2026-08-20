@@ -120,9 +120,26 @@ export CODER_EXPERIMENTS_DIR="$RUN_DIR/experiments"
 # small files should use localscratch to avoid inode quota violations, and a venv
 # is thousands of small files. It is rebuilt per job, so nothing is lost.
 export CODER_VENV_ROOT="$LOCALSCRATCH/coder-agent-venvs-${SLURM_JOB_ID}"
-# GPU 0 belongs to vLLM; the experiment gets GPU 1. Ordinal into this job's own
-# allocation, not a node-wide device id.
-export CODER_EXPERIMENT_GPUS="${CODER_EXPERIMENT_GPUS:-1}"
+# GPU 0 belongs to vLLM; the experiment gets GPU 1 when there is one. Ordinals
+# index this job's own allocation, not node-wide device ids.
+#
+# Derived from what was actually allocated rather than assumed: with
+# --gres=gpu:1 there is no GPU 1, and pinning an experiment to a device that
+# does not exist fails inside the generated code with a CUDA error that looks
+# like the experiment's fault. Many plans (anything Stan/PyMC-shaped) are
+# CPU-bound anyway, and a 1-GPU request schedules far sooner on a busy
+# partition.
+#
+# Note the `-` rather than `:-`: an explicitly empty CODER_EXPERIMENT_GPUS means
+# "no GPU for the experiment" and must be honoured, whereas `:-` would treat
+# empty as unset and silently hand back GPU 1.
+GPUS_ALLOCATED="${SLURM_GPUS_ON_NODE:-$(nvidia-smi -L 2>/dev/null | wc -l)}"
+if [[ "${GPUS_ALLOCATED:-0}" -ge 2 ]]; then
+    export CODER_EXPERIMENT_GPUS="${CODER_EXPERIMENT_GPUS-1}"
+else
+    export CODER_EXPERIMENT_GPUS="${CODER_EXPERIMENT_GPUS-}"
+    echo "note: only $GPUS_ALLOCATED GPU allocated — vLLM takes it, experiments run CPU-only"
+fi
 export CODER_MEMORY_LIMIT_GB="${CODER_MEMORY_LIMIT_GB:-256}"
 
 echo "=== job $SLURM_JOB_ID on $(hostname) ==="
@@ -132,6 +149,7 @@ echo "project:     $PROJECT"
 echo "run dir:     $RUN_DIR"
 echo "base env:    $CODER_BASE_ENV"
 echo "venv root:   $CODER_VENV_ROOT  (localscratch — no inode quota)"
+echo "gpus:        $GPUS_ALLOCATED allocated; experiment gets '${CODER_EXPERIMENT_GPUS:-none}'"
 echo "started:     $(date)"
 nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader || true
 echo
