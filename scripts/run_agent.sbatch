@@ -87,6 +87,15 @@ cd "$PROJECT" || { echo "error: $PROJECT not found" >&2; exit 1; }
 RUN_DIR="$FASTSCRATCH/coder-agent-runs/${SLURM_JOB_ID}"
 mkdir -p "$RUN_DIR" "$LOCALSCRATCH"
 
+# Where Slurm is writing this script's own stdout. It cannot be pointed straight
+# at $RUN_DIR: --output is opened before the script runs, and Slurm does not
+# create missing parent directories, so a path containing %j would fail to open
+# and kill the job. Asking scontrol keeps this correct no matter which wrapper
+# script was submitted or which directory it was submitted from — and the copy
+# at the end makes the run directory self-contained, so one rsync gets
+# everything about a job.
+SLURM_LOG="$(scontrol show job "$SLURM_JOB_ID" 2>/dev/null | sed -n 's/.*StdOut=\([^[:space:]]*\).*/\1/p' | head -1)"
+
 # --- threading (§8) -----------------------------------------------------------
 # Without this, any OpenMP-linked library in a generated experiment (numpy,
 # scipy, sklearn, Stan) takes ALL 96 cores on the node as its default and
@@ -147,6 +156,12 @@ cleanup() {
     # localscratch is purged automatically after 30 days, but a long batch of
     # jobs on one node would otherwise pile up venvs in the meantime.
     rm -rf "$CODER_VENV_ROOT"
+    # Copy this job's own log next to its results. The last few lines of the
+    # copy will be missing (the shell is still writing to the original as this
+    # runs), which is why the original is left in place rather than moved.
+    if [[ -n "${SLURM_LOG:-}" && -f "$SLURM_LOG" ]]; then
+        cp "$SLURM_LOG" "$RUN_DIR/slurm.log" 2>/dev/null || true
+    fi
 }
 trap cleanup EXIT
 
