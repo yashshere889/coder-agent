@@ -134,11 +134,24 @@ export CODER_VENV_ROOT="$LOCALSCRATCH/coder-agent-venvs-${SLURM_JOB_ID}"
 # "no GPU for the experiment" and must be honoured, whereas `:-` would treat
 # empty as unset and silently hand back GPU 1.
 GPUS_ALLOCATED="${SLURM_GPUS_ON_NODE:-$(nvidia-smi -L 2>/dev/null | wc -l)}"
-if [[ "${GPUS_ALLOCATED:-0}" -ge 2 ]]; then
-    export CODER_EXPERIMENT_GPUS="${CODER_EXPERIMENT_GPUS-1}"
+GPUS_ALLOCATED="${GPUS_ALLOCATED:-1}"
+TP="${TP:-1}"
+
+# vLLM takes the first TP devices; whatever is left over goes to the experiment.
+# Deriving both from TP rather than hardcoding matters on the 48GB partitions:
+# the model needs TP=2 to fit across two L40S cards, and the old fixed pairing
+# (server on device 0, experiment on device 1) then handed the experiment a card
+# vLLM was already sharding onto, while simultaneously starting a TP=2 server
+# that could only see one device.
+SERVER_GPUS="$(seq -s, 0 $((TP - 1)))"
+if [[ "$GPUS_ALLOCATED" -gt "$TP" ]]; then
+    _spare_gpus="$(seq -s, "$TP" $((GPUS_ALLOCATED - 1)))"
 else
-    export CODER_EXPERIMENT_GPUS="${CODER_EXPERIMENT_GPUS-}"
-    echo "note: only $GPUS_ALLOCATED GPU allocated — vLLM takes it, experiments run CPU-only"
+    _spare_gpus=""
+fi
+export CODER_EXPERIMENT_GPUS="${CODER_EXPERIMENT_GPUS-$_spare_gpus}"
+if [[ -z "$CODER_EXPERIMENT_GPUS" ]]; then
+    echo "note: all $GPUS_ALLOCATED allocated GPU(s) go to vLLM (TP=$TP) — experiments run CPU-only"
 fi
 export CODER_MEMORY_LIMIT_GB="${CODER_MEMORY_LIMIT_GB:-256}"
 
@@ -157,7 +170,7 @@ echo
 # --- 1. the model server -------------------------------------------------------
 export VLLM_LOG="$RUN_DIR/vllm.log"
 export VLLM_PID_FILE="$RUN_DIR/vllm.pid"
-TP="${TP:-1}" SERVER_GPUS=0 bash scripts/serve_vllm.sh || {
+TP="$TP" SERVER_GPUS="$SERVER_GPUS" bash scripts/serve_vllm.sh || {
     echo "error: the model server never came up; see $VLLM_LOG" >&2
     exit 1
 }
